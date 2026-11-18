@@ -1,0 +1,57 @@
+name: Build Unsigned iOS IPA
+
+# 手动触发：在 GitHub 仓库 Actions 页面点 "Run workflow"
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Show available simulators & SDK
+        run: xcodebuild -version
+
+      - name: Build unsigned app (device)
+        run: |
+          xcodebuild \
+            -project RemoteControl.xcodeproj \
+            -scheme RemoteControl \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=NO \
+            SYMROOT="$(pwd)/build" \
+            clean build
+
+      - name: Pack unsigned IPA
+        run: |
+          APP="$(pwd)/build/Release-iphoneos/RemoteControl.app"
+          if [ ! -d "$APP" ]; then
+            echo "ERROR: $APP not found"
+            find "$(pwd)/build" -maxdepth 4 -name '*.app' -print
+            exit 1
+          fi
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry RemoteControl-unsigned.ipa Payload
+          ls -lh RemoteControl-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteControl-unsigned-IPA
+          path: RemoteControl-unsigned.ipa
+          retention-days: 30
