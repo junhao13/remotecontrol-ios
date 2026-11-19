@@ -62,6 +62,10 @@ struct ContentView: View {
                     }
                 }
                 .padding(.horizontal)
+                // 按被控端屏幕比例锁定画面区域，避免 View 被压扁导致画面裁切/拉伸
+                .aspectRatio(conn.screenW > 0 && conn.screenH > 0
+                             ? CGFloat(conn.screenW) / CGFloat(conn.screenH)
+                             : CGFloat(9) / CGFloat(19.5), contentMode: .fit)
                 .layoutPriority(1)
 
                 // 虚拟按键
@@ -134,91 +138,65 @@ struct ContentView: View {
 }
 
 /// 显示 JPEG 帧并把触摸坐标映射为被控端物理坐标
-struct RemoteImageView: UIViewRepresentable {
+/// 用纯 SwiftUI Image + scaledToFit，杜绝 UIViewRepresentable 布局导致的画面裁切/拉伸
+struct RemoteImageView: View {
     let image: UIImage
     let conn: RemoteConnection
 
-    func makeUIView(context: Context) -> UIImageView {
-        let iv = UIImageView()
-        iv.contentMode = .scaleAspectFit
-        iv.isUserInteractionEnabled = true
-        iv.clipsToBounds = true
-        iv.backgroundColor = .black
-
-        let tap = UITapGestureRecognizer(target: context.coordinator,
-                                         action: #selector(Coordinator.handleTap(_:)))
-        let pan = UIPanGestureRecognizer(target: context.coordinator,
-                                         action: #selector(Coordinator.handlePan(_:)))
-        pan.minimumNumberOfTouches = 1
-        pan.maximumNumberOfTouches = 1
-        tap.require(toFail: pan)
-        iv.addGestureRecognizer(tap)
-        iv.addGestureRecognizer(pan)
-        return iv
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: geo.size.width, height: geo.size.height)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onEnded { value in
+                        // scaledToFit 实际绘制矩形
+                        let vw = geo.size.width, vh = geo.size.height
+                        let bw = image.size.width, bh = image.size.height
+                        guard bw > 0, bh > 0 else { return }
+                        let scale = min(vw / bw, vh / bh)
+                        let drawW = bw * scale, drawH = bh * scale
+                        let offsetX = (vw - drawW) / 2, offsetY = (vh - drawH) / 2
+                        handleGesture(value, drawW: drawW, drawH: drawH,
+                                      offsetX: offsetX, offsetY: offsetY)
+                    }
+            )
+        }
     }
 
-    func updateUIView(_ iv: UIImageView, context: Context) {
-        iv.image = image
-        context.coordinator.conn = conn
-        context.coordinator.imageSize = image.size
-    }
+    /// View 坐标 -> scaledToFit 画面坐标 -> 被控端物理坐标
+    private func handleGesture(_ value: DragGesture.Value,
+                               drawW: CGFloat, drawH: CGFloat,
+                               offsetX: CGFloat, offsetY: CGFloat) {
+        guard drawW > 0, drawH > 0, conn.screenW > 0, conn.screenH > 0 else { return }
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    final class Coordinator: NSObject {
-        var conn: RemoteConnection?
-        var imageSize: CGSize = .zero
-        private var panStart: CGPoint = .zero
-        private var panStartTime: TimeInterval = 0
-
-        /// 把 View 坐标 -> 画面坐标 -> 被控端物理坐标（对应 Android toRemote()）
-        private func toRemote(_ point: CGPoint, in view: UIView) -> (Int32, Int32)? {
-            let vw = view.bounds.width, vh = view.bounds.height
-            let bw = imageSize.width, bh = imageSize.height
-            guard vw > 0, vh > 0, bw > 0, bh > 0,
-                  let conn = conn, conn.screenW > 0, conn.screenH > 0 else { return nil }
-
-            // scaleAspectFit：等比缩放并居中
-            let scale = min(vw / bw, vh / bh)
-            let drawW = bw * scale
-            let drawH = bh * scale
-            let offsetX = (vw - drawW) / 2
-            let offsetY = (vh - drawH) / 2
-
-            var fx = (point.x - offsetX) / drawW
-            var fy = (point.y - offsetY) / drawH
+        func toRemote(_ p: CGPoint) -> (Int32, Int32) {
+            var fx = (p.x - offsetX) / drawW
+            var fy = (p.y - offsetY) / drawH
             fx = max(0, min(1, fx))
             fy = max(0, min(1, fy))
             return (Int32(fx * CGFloat(conn.screenW)), Int32(fy * CGFloat(conn.screenH)))
         }
 
-        @objc func handleTap(_ g: UITapGestureRecognizer) {
-            guard let view = g.view, let p = toRemote(g.location(in: view), in: view) else { return }
-            conn?.tap(x: p.0, y: p.1)
-        }
+        let start = value.startLocation
+        let end = value.location
+        let dx = end.x - start.x
+        let dy = end.y - start.y
 
-        @objc func handlePan(_ g: UIPanGestureRecognizer) {
-            guard let view = g.view else { return }
-            switch g.state {
-            case .began:
-                panStart = g.location(in: view)
-                panStartTime = Date().timeIntervalSince1970
-            case .ended:
-                let endPoint = g.location(in: view)
-                guard let s = toRemote(panStart, in: view),
-                      let e = toRemote(endPoint, in: view) else { return }
-                let dx = endPoint.x - panStart.x
-                let dy = endPoint.y - panStart.y
-                let elapsed = (Date().timeIntervalSince1970 - panStartTime) * 1000
-                if abs(dx) < 12 && abs(dy) < 12 && elapsed < 600 {
-                    conn?.tap(x: e.0, y: e.1)
-                } else {
-                    let duration = Int32(max(100, min(1500, elapsed)))
-                    conn?.swipe(x1: s.0, y1: s.1, x2: e.0, y2: e.1, duration: duration)
-                }
-            default:
-                break
-            }
+        if abs(dx) < 12 && abs(dy) < 12 {
+            let p = toRemote(end)
+            conn.tap(x: p.0, y: p.1)
+        } else {
+            let s = toRemote(start)
+            let e = toRemote(end)
+            let duration: Int32 = 300
+            conn.swipe(x1: s.0, y1: s.1, x2: e.0, y2: e.1, duration: duration)
         }
     }
 }
