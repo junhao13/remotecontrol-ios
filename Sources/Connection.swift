@@ -78,11 +78,11 @@ final class RemoteConnection: ObservableObject {
         }
     }
 
-    /// 帧投递定时器：每 100ms 取最新帧更新一次 UI（最多 10 FPS），中间帧丢弃
+    /// 帧投递定时器：每 60ms 取最新帧更新一次 UI（最多约 16 FPS），中间帧丢弃
     private func startFrameTicker() {
         stopFrameTicker()
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(100))
+        timer.schedule(deadline: .now(), repeating: .milliseconds(60))
         timer.setEventHandler { [weak self] in
             guard let self = self else { return }
             self.frameLock.lock()
