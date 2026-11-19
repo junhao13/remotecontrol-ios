@@ -25,11 +25,17 @@ final class RemoteConnection: ObservableObject {
     private var frameW: Int32 = 0
     private var frameH: Int32 = 0
 
+    // 画面节流：只保留最新帧，定时投到主线程，避免每帧重建 SwiftUI 视图拖垮接收
+    private let frameLock = NSLock()
+    private var pendingImage: UIImage?
+    private var frameTimer: DispatchSourceTimer?
+
     /// 是否处于已连接可发指令状态
     var isConnected: Bool { state == .connected }
 
     func connect(host: String, port: UInt16 = RCProtocol.port) {
         disconnect()
+        startFrameTicker()
         publishState(.connecting, "正在连接 \(host):\(port) …")
 
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host),
@@ -61,13 +67,37 @@ final class RemoteConnection: ObservableObject {
         decoder.reset()
         connection?.cancel()
         connection = nil
+        stopFrameTicker()
         frameW = 0; frameH = 0
         screenW = 0; screenH = 0
+        frameLock.lock(); pendingImage = nil; frameLock.unlock()
         DispatchQueue.main.async {
             self.screenImage = nil
             self.state = .idle
             self.statusText = "输入被控端地址后点「连接」"
         }
+    }
+
+    /// 帧投递定时器：每 100ms 取最新帧更新一次 UI（最多 10 FPS），中间帧丢弃
+    private func startFrameTicker() {
+        stopFrameTicker()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(100))
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            self.frameLock.lock()
+            let img = self.pendingImage
+            self.pendingImage = nil
+            self.frameLock.unlock()
+            if let img = img { self.screenImage = img }
+        }
+        timer.resume()
+        frameTimer = timer
+    }
+
+    private func stopFrameTicker() {
+        frameTimer?.cancel()
+        frameTimer = nil
     }
 
     private func publishState(_ s: ConnState, _ text: String) {
@@ -130,8 +160,11 @@ final class RemoteConnection: ObservableObject {
                          "已连接：\(screenW)x\(screenH)  帧 \(frameW)x\(frameH)")
 
         case RCProtocol.MSG_FRAME:
+            // 解码后只存到 pending，供定时器取最新帧投递；中间帧直接覆盖丢弃
             if let img = UIImage(data: msg.payload) {
-                DispatchQueue.main.async { self.screenImage = img }
+                frameLock.lock()
+                pendingImage = img
+                frameLock.unlock()
             }
 
         default:
@@ -162,5 +195,8 @@ final class RemoteConnection: ObservableObject {
         sendRaw(RCProtocol.pack(RCProtocol.CMD_TEXT, str.data(using: .utf8)))
     }
 
-    deinit { connection?.cancel() }
+    deinit {
+        stopFrameTicker()
+        connection?.cancel()
+    }
 }
