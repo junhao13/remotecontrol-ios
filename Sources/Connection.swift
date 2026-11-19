@@ -25,9 +25,11 @@ final class RemoteConnection: ObservableObject {
     private var frameW: Int32 = 0
     private var frameH: Int32 = 0
 
-    // 画面节流：只保留最新帧，定时投到主线程，避免每帧重建 SwiftUI 视图拖垮接收
+    // 画面节流：接收线程只缓存"最新一帧的原始字节"，绝不在接收线程解码，
+    // 否则每帧 UIImage(data:) 同步解码会堵死 socket 读取，导致 TCP 发送队列堆积旧帧。
+    // 定时器到点才解码并渲染最新一帧，中间堆积的旧帧被覆盖直接丢弃。
     private let frameLock = NSLock()
-    private var pendingImage: UIImage?
+    private var pendingData: Data?
     private var frameTimer: DispatchSourceTimer?
 
     /// 是否处于已连接可发指令状态
@@ -70,7 +72,7 @@ final class RemoteConnection: ObservableObject {
         stopFrameTicker()
         frameW = 0; frameH = 0
         screenW = 0; screenH = 0
-        frameLock.lock(); pendingImage = nil; frameLock.unlock()
+        frameLock.lock(); pendingData = nil; frameLock.unlock()
         DispatchQueue.main.async {
             self.screenImage = nil
             self.state = .idle
@@ -78,18 +80,23 @@ final class RemoteConnection: ObservableObject {
         }
     }
 
-    /// 帧投递定时器：每 60ms 取最新帧更新一次 UI（最多约 16 FPS），中间帧丢弃
+    /// 帧投递定时器：每 50ms 只解码渲染"当前最新的一帧"。
+    /// 关键：解码放到这里做，绝不放接收线程；这样接收线程能全速排空 TCP 队列，
+    /// 队列里堆积的旧帧在读进来时就被后来帧覆盖丢弃，不会逐帧显示。
     private func startFrameTicker() {
         stopFrameTicker()
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(60))
+        timer.schedule(deadline: .now(), repeating: .milliseconds(50))
         timer.setEventHandler { [weak self] in
             guard let self = self else { return }
             self.frameLock.lock()
-            let img = self.pendingImage
-            self.pendingImage = nil
+            let data = self.pendingData
+            self.pendingData = nil
             self.frameLock.unlock()
-            if let img = img { self.screenImage = img }
+            // 只解码这 50ms 窗口内的最新一帧；解码开销只在主线程发生一次
+            if let data = data, let img = UIImage(data: data) {
+                self.screenImage = img
+            }
         }
         timer.resume()
         frameTimer = timer
@@ -160,12 +167,11 @@ final class RemoteConnection: ObservableObject {
                          "已连接：\(screenW)x\(screenH)  帧 \(frameW)x\(frameH)")
 
         case RCProtocol.MSG_FRAME:
-            // 解码后只存到 pending，供定时器取最新帧投递；中间帧直接覆盖丢弃
-            if let img = UIImage(data: msg.payload) {
-                frameLock.lock()
-                pendingImage = img
-                frameLock.unlock()
-            }
+            // 接收线程只做一次 Data 持有（几乎零开销），绝不解码。
+            // 快速排空 TCP 队列：旧帧读到后直接被下一帧覆盖，只留最新一帧给定时器解码。
+            frameLock.lock()
+            pendingData = msg.payload
+            frameLock.unlock()
 
         default:
             break
