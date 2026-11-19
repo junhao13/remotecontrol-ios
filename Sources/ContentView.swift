@@ -189,7 +189,7 @@ struct RemoteImageView: UIViewRepresentable {
             var fy = (point.y - offsetY) / drawH
             fx = max(0, min(1, fx))
             fy = max(0, min(1, fy))
-            return (Int32(fx * Float(conn.screenW)), Int32(fy * Float(conn.screenH)))
+            return (Int32(fx * CGFloat(conn.screenW)), Int32(fy * CGFloat(conn.screenH)))
         }
 
         @objc func handleTap(_ g: UITapGestureRecognizer) {
