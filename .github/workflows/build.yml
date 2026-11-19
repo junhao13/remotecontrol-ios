@@ -1,8 +1,10 @@
 name: Build Unsigned iOS IPA
 
-# 手动触发：在 GitHub 仓库 Actions 页面点 "Run workflow"
+# 触发方式：push 到 master 自动编译；也可在 Actions 页面手动点 "Run workflow"
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
 
 jobs:
   build:
