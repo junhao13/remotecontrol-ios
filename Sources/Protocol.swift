@@ -26,6 +26,8 @@ enum RCProtocol {
     static let KEY_POWER: Int32 = 4
     static let KEY_VOL_UP: Int32 = 5
     static let KEY_VOL_DOWN: Int32 = 6
+    static let KEY_SCREEN_OFF: Int32 = 7
+    static let KEY_SCREEN_ON: Int32 = 8
 
     static let maxMessageLength = 20 * 1024 * 1024
 
