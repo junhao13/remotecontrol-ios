@@ -74,7 +74,8 @@ struct ContentView: View {
                         keyButton("主页", .init(RCProtocol.KEY_HOME), "house")
                         keyButton("返回", .init(RCProtocol.KEY_BACK), "arrow.left")
                         keyButton("多任务", .init(RCProtocol.KEY_RECENTS), "square.stack")
-                        keyButton("电源", .init(RCProtocol.KEY_POWER), "power")
+                        keyButton("熄屏", .init(RCProtocol.KEY_SCREEN_OFF), "moon")
+                        keyButton("亮屏", .init(RCProtocol.KEY_SCREEN_ON), "sun.max")
                         keyButton("音量+", .init(RCProtocol.KEY_VOL_UP), "speaker.wave.2")
                         keyButton("音量−", .init(RCProtocol.KEY_VOL_DOWN), "speaker.wave.1")
                     }
